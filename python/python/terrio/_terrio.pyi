@@ -17,6 +17,7 @@ __all__ = [
     "refresh_overviews",
     "update_raster",
     "validate_cog",
+    "validate_gpkg",
     "check_dataset",
     "identify",
     "dataset_copy",
@@ -1993,3 +1994,10 @@ def check_dataset(
     overviews: bool = False,
     masks: bool = False,
 ) -> dict[str, int]: ...
+def validate_gpkg(
+    path: str | os.PathLike[str] | bytes,
+    *,
+    full_check: bool = False,
+    strict: bool = False,
+    unicode_case: bool = False,
+) -> dict[str, Any]: ...
