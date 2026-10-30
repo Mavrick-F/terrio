@@ -126,6 +126,48 @@ pub(crate) fn parse_options<T: serde::de::DeserializeOwned + Default>(options: &
     serde_json::from_str(&text).map_err(|e| JsError::new(&format!("options: {e}")))
 }
 
+/// A shallow copy of an options object without `key`, whose value is not read (the value itself
+/// when it is not an object).
+fn without_key(options: &JsValue, key: &str) -> Result<JsValue, JsError> {
+    use wasm_bindgen::JsCast;
+    if !options.is_object() {
+        return Ok(options.clone());
+    }
+    let copy = js_sys::Object::new();
+    let object: &js_sys::Object = options.unchecked_ref();
+    for name in js_sys::Object::keys(object).iter().filter(|name| name.as_string().as_deref() != Some(key)) {
+        let value = js_sys::Reflect::get(options, &name).map_err(|_| JsError::new("invalid options"))?;
+        js_sys::Reflect::set(&copy, &name, &value).map_err(|_| JsError::new("invalid options"))?;
+    }
+    Ok(copy.into())
+}
+
+/// The files of a `kmzResources` option, `{ "icons/pin.png": Uint8Array }`, read from the options
+/// object itself rather than through JSON, which writes each of their bytes as a separate entry.
+fn kmz_resources(options: &JsValue) -> Result<Vec<(String, Vec<u8>)>, JsError> {
+    use wasm_bindgen::JsCast;
+    if !options.is_object() {
+        return Ok(Vec::new());
+    }
+    let files = js_sys::Reflect::get(options, &JsValue::from_str("kmzResources")).map_err(|_| JsError::new("invalid options"))?;
+    if files.is_undefined() || files.is_null() {
+        return Ok(Vec::new());
+    }
+    let files = files.dyn_into::<js_sys::Object>().map_err(|_| JsError::new("kmzResources: an object of Uint8Arrays"))?;
+    js_sys::Object::entries(&files)
+        .iter()
+        .map(|entry| {
+            let entry: js_sys::Array = entry.unchecked_into();
+            let path = entry.get(0).as_string().unwrap_or_default();
+            let bytes = entry
+                .get(1)
+                .dyn_into::<js_sys::Uint8Array>()
+                .map_err(|_| JsError::new(&format!("kmzResources: '{path}' is not a Uint8Array")))?;
+            Ok((path, bytes.to_vec()))
+        })
+        .collect()
+}
+
 /// Pixels as a typed array of their own type.
 fn typed_array(data: RasterData) -> JsValue {
     match data {
@@ -655,7 +697,8 @@ impl Dataset {
 
     /// Writes the dataset in a format, to bytes: the format of `filename`'s extension, or
     /// `options.format`. Options: `format`, `tSrs` (reproject), and for vector datasets `layers`,
-    /// `where`, `select` and `limit`, for rasters `srcwin`, `overview`, `bands`, `compress`
+    /// `where`, `select`, `limit` and `kmzResources` (files packed into a KMZ, such as icon images:
+    /// `{ "icons/pin.png": Uint8Array }`), for rasters `srcwin`, `overview`, `bands`, `compress`
     /// (GeoTIFF/COG: `NONE`, `LZW`, `DEFLATE`, `PACKBITS`, `ZSTD`, `LERC`, `LERC_DEFLATE`,
     /// `LERC_ZSTD`, `JXL`, `JPEG`), `tileSize` and `creationOptions` (GDAL's: `MAX_Z_ERROR`,
     /// `JPEG_QUALITY`, `PREDICTOR`, `FORMAT=NC4` for netCDF, `FORMAT=ZARR_V3` for Zarr...),
@@ -668,7 +711,9 @@ impl Dataset {
     /// Text over 254 UTF-8 bytes and unsupported DBF values are explicit errors.
     #[wasm_bindgen(js_name = toBytes)]
     pub fn to_bytes(&self, filename: &str, options: JsValue) -> Result<Vec<u8>, JsError> {
-        let o: WriteOptions = parse_options(&options)?;
+        let resources = kmz_resources(&options)?;
+        // Without the resource bytes, which JSON would write one entry per byte.
+        let o: WriteOptions = parse_options(&without_key(&options, "kmzResources")?)?;
         let transform_options = TransformOptions {
             allow_ballpark: o.allow_ballpark,
             only_best: o.only_best,
@@ -678,8 +723,8 @@ impl Dataset {
         let t_srs = o.t_srs.as_deref().map(SpatialRef::parse).transpose().map_err(js_err)?;
         match &mut *self.inner.borrow_mut() {
             Inner::Raster(r) => {
-                if o.layers.is_some() || o.r#where.is_some() || o.select.is_some() || o.limit.is_some() {
-                    return Err(JsError::new("layers, where, select and limit apply to vector datasets"));
+                if o.layers.is_some() || o.r#where.is_some() || o.select.is_some() || o.limit.is_some() || !resources.is_empty() {
+                    return Err(JsError::new("layers, where, select, limit and kmzResources apply to vector datasets"));
                 }
                 let driver = o
                     .format
@@ -761,6 +806,7 @@ impl Dataset {
                 let mut options = VectorWriteOptions { driver, ..Default::default() };
                 options.tiles.min_zoom = o.minzoom;
                 options.tiles.max_zoom = o.maxzoom;
+                options.kmz.resources = resources;
                 terrio::memory::write_vector_bytes(&out, filename, &options).map_err(js_err)
             }
         }

@@ -252,6 +252,8 @@ pub struct VectorOpenOptions {
     pub layers: Vec<String>,
     /// How to read CSV files.
     pub csv: crate::drivers::vector::csv::CsvOptions,
+    /// How to read shapefiles: how the rings of a polygon record make polygons.
+    pub shapefile: crate::drivers::vector::shapefile::ShapefileOptions,
     /// A rectangle `(min_x, min_y, max_x, max_y)` in the layer's CRS: drivers that index their
     /// features (GeoParquet's bounding-box covering column and row group statistics, GeoPackage's
     /// R-tree) skip those whose bounding box is outside it. Callers still filter the features
@@ -265,7 +267,8 @@ pub struct VectorOpenOptions {
 
 impl VectorOpenOptions {
     /// Sets a driver open option by its GDAL name (`KEY`, `VALUE`): the CSV options (see
-    /// [`CsvOptions::set`](crate::CsvOptions::set)), the tile archive options
+    /// [`CsvOptions::set`](crate::CsvOptions::set)), the shapefile options
+    /// ([`ShapefileOptions::set`](crate::ShapefileOptions::set)), the tile archive options
     /// ([`TileOpenOptions::set`](crate::tiles::TileOpenOptions::set)) and the HECRAS options
     /// ([`HecRasOpenOptions::set`](crate::HecRasOpenOptions::set)). Returns `false` for a name
     /// none of them knows.
@@ -277,7 +280,7 @@ impl VectorOpenOptions {
     /// # Ok::<(), terrio::Error>(())
     /// ```
     pub fn set(&mut self, key: &str, value: &str) -> Result<bool> {
-        Ok(self.csv.set(key, value)? || self.tiles.set(key, value)? || self.hecras.set(key, value)?)
+        Ok(self.csv.set(key, value)? || self.shapefile.set(key, value)? || self.tiles.set(key, value)? || self.hecras.set(key, value)?)
     }
 }
 
@@ -933,6 +936,8 @@ pub struct VectorWriteOptions {
     pub geojson: crate::drivers::vector::geojson::GeoJsonOptions,
     /// How to write vector tiles (PMTiles, MBTiles, MVT): zoom levels, buffer, simplification.
     pub tiles: crate::tiles::TileWriteOptions,
+    /// How to write KMZ archives: the files, such as icon images, packed with the documents.
+    pub kmz: crate::drivers::vector::kml::KmzOptions,
 }
 
 /// Writes vector layers. GeoPackage, GPX, KML, KMZ and TopoJSON hold several layers in one file;
@@ -957,11 +962,13 @@ pub fn write_vector(layers: &[Layer], path: &str, options: &VectorWriteOptions) 
             // With the GDAL backend, the GDAL driver of the extension (`.gdb`...).
             #[cfg(feature = "gdal")]
             if let Some(d) = crate::gdal_backend::driver_for_path(path, true) {
+                ensure_kmz_resources_apply(options, None)?;
                 return crate::gdal_backend::write_vector(layers, path, &d, &[], &[]);
             }
             return Err(Error::InvalidArgument(format!("cannot tell the output format of '{path}': give it explicitly")));
         }
     };
+    ensure_kmz_resources_apply(options, Some(driver))?;
     driver.ensure_built()?;
     if !driver.info().write {
         return Err(Error::Unsupported(format!("the {} driver cannot write", driver.name())));
@@ -977,7 +984,7 @@ pub fn write_vector(layers: &[Layer], path: &str, options: &VectorWriteOptions) 
         }
         (VectorDriver::GPX, _) => crate::drivers::vector::gpx::write_layers(layers, path),
         (VectorDriver::KML, _) => crate::drivers::vector::kml::write(layers, path),
-        (VectorDriver::KMZ, _) => crate::drivers::vector::kml::write_kmz(layers, path),
+        (VectorDriver::KMZ, _) => crate::drivers::vector::kml::write_kmz(layers, path, &options.kmz),
         (VectorDriver::TopoJSON, _) => crate::drivers::vector::topojson::write_layers(layers, path),
         #[cfg(feature = "tiles")]
         (VectorDriver::MBTiles | VectorDriver::PMTiles | VectorDriver::MVT, _) => {
@@ -992,6 +999,15 @@ pub fn write_vector(layers: &[Layer], path: &str, options: &VectorWriteOptions) 
         }
         (d, _) => Err(Error::InvalidArgument(format!("the {} format holds one layer: choose a layer, or write a GeoPackage", d.name()))),
     }
+}
+
+/// KMZ resources are packed into KMZ archives only, so any other output refuses them rather than
+/// dropping them. `driver` is `None` for a format only GDAL writes.
+pub(crate) fn ensure_kmz_resources_apply(options: &VectorWriteOptions, driver: Option<VectorDriver>) -> Result<()> {
+    if options.kmz.resources.is_empty() || driver == Some(VectorDriver::KMZ) {
+        return Ok(());
+    }
+    Err(Error::InvalidArgument("kmz_resources applies to KMZ output".into()))
 }
 
 pub(crate) fn ensure_writable_location(path: &str) -> Result<()> {

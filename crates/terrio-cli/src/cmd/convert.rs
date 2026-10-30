@@ -45,7 +45,8 @@ pub struct Args {
     #[arg(long, value_name = "N")]
     overview: Option<usize>,
     /// An open option, as GDAL names it: `KEY=VALUE` (CSV: X_POSSIBLE_NAMES, Y_POSSIBLE_NAMES,
-    /// GEOM_POSSIBLE_NAMES, AUTODETECT_TYPE, KEEP_GEOM_COLUMNS, SEPARATOR; PMTiles, MBTiles and MVT:
+    /// GEOM_POSSIBLE_NAMES, AUTODETECT_TYPE, KEEP_GEOM_COLUMNS, SEPARATOR; Shapefile:
+    /// ORGANIZE_POLYGONS, the methods of GDAL's OGR_ORGANIZE_POLYGONS; PMTiles, MBTiles and MVT:
     /// ZOOM_LEVEL, CLIP; HECRAS: MESHES, GEOMETRY_POLICY, CELL_SUMMARIES, FACE_SUMMARIES,
     /// CELL_ATTRIBUTES, FACE_ATTRIBUTES, CELL_SERIES, FACE_SERIES, CELL_MAXIMUM, CELL_MINIMUM,
     /// FACE_MAXIMUM, FACE_MINIMUM, TIME_STEP, XS_SUMMARIES, XS_RESULTS, XS_PROFILE, XS_GEOMETRY,
@@ -54,7 +55,8 @@ pub struct Args {
     #[arg(long = "oo", value_name = "KEY=VALUE")]
     open_options: Vec<String>,
     /// A vector layer creation option, as GDAL names it: `KEY=VALUE` (CSV: GEOMETRY=AS_WKT|AS_XY;
-    /// GeoJSON: RFC7946=YES; vector tiles: MINZOOM, MAXZOOM, EXTENT, BUFFER, SIMPLIFICATION,
+    /// GeoJSON: RFC7946=YES, ID_FIELD, ID_TYPE; GeoJSONSeq: ID_FIELD, ID_TYPE; vector tiles:
+    /// MINZOOM, MAXZOOM, EXTENT, BUFFER, SIMPLIFICATION,
     /// SIMPLIFICATION_MAX_ZOOM, NAME, DESCRIPTION, TYPE).
     #[arg(long = "lco", value_name = "KEY=VALUE")]
     creation_options: Vec<String>,
@@ -73,6 +75,11 @@ pub struct Args {
     /// Tile archives (PMTiles, MBTiles, MVT): the highest zoom level written.
     #[arg(long)]
     maxzoom: Option<u8>,
+    /// KMZ output: a file packed into the archive, such as an icon image, by the relative path
+    /// the styles refer to it with: `PATH` (read from that path) or `PATH=FILE`. A `PATH` that is
+    /// an existing file is taken whole, even with an `=`. Repeat it for several files.
+    #[arg(long = "kmz-resource", value_name = "PATH[=FILE]")]
+    kmz_resources: Vec<String>,
     #[command(flatten)]
     vector: super::vector_opts::VectorArgs,
     #[command(flatten)]
@@ -86,6 +93,19 @@ pub(super) fn key_values(options: &[String]) -> terrio::Result<Vec<(&str, &str)>
     options
         .iter()
         .map(|o| o.split_once('=').ok_or_else(|| terrio::Error::InvalidArgument(format!("option '{o}' is not KEY=VALUE"))))
+        .collect()
+}
+
+/// The files of `--kmz-resource`: `PATH`, read from that path, or `PATH=FILE`. A value that is an
+/// existing file is a `PATH`, so archive paths may hold `=`.
+fn kmz_resources(values: &[String]) -> terrio::Result<Vec<(String, Vec<u8>)>> {
+    values
+        .iter()
+        .map(|v| {
+            let whole = (v.as_str(), v.as_str());
+            let (path, file) = if std::path::Path::new(v).is_file() { whole } else { v.split_once('=').unwrap_or(whole) };
+            Ok((path.to_string(), std::fs::read(file)?))
+        })
         .collect()
 }
 
@@ -110,6 +130,10 @@ fn stream_options(a: &Args) -> terrio::Result<Option<terrio::stream::ConvertOpti
         if !open.set(k, v)? {
             return Err(terrio::Error::InvalidArgument(format!("unknown open option '{k}'")));
         }
+    }
+    // KMZ resources are packed by the whole-archive writer.
+    if !a.kmz_resources.is_empty() {
+        return Ok(None);
     }
     let mut write = VectorWriteOptions { driver, ..Default::default() };
     for (k, v) in key_values(&a.creation_options)? {
@@ -306,6 +330,11 @@ pub fn run(mut a: Args) -> terrio::Result<()> {
                             "--minzoom and --maxzoom apply to tile archives, not to GDAL's {d} driver"
                         )));
                     }
+                    if !a.kmz_resources.is_empty() {
+                        return Err(terrio::Error::InvalidArgument(format!(
+                            "--kmz-resource applies to KMZ output, not to GDAL's {d} driver"
+                        )));
+                    }
                     let pairs = |o: &[String]| -> terrio::Result<Vec<(String, String)>> {
                         Ok(key_values(o)?.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
                     };
@@ -324,6 +353,12 @@ pub fn run(mut a: Args) -> terrio::Result<()> {
             let mut options = VectorWriteOptions { driver, ..Default::default() };
             options.tiles.min_zoom = a.minzoom;
             options.tiles.max_zoom = a.maxzoom;
+            if !a.kmz_resources.is_empty() {
+                if !matches!(driver.or_else(|| VectorDriver::for_extension(&a.output)), Some(VectorDriver::KMZ)) {
+                    return Err(terrio::Error::InvalidArgument("--kmz-resource applies to KMZ output".into()));
+                }
+                options.kmz.resources = kmz_resources(&a.kmz_resources)?;
+            }
             let tiles_out = matches!(
                 driver.or_else(|| VectorDriver::for_extension(&a.output)),
                 Some(VectorDriver::MBTiles | VectorDriver::PMTiles | VectorDriver::MVT)
@@ -336,5 +371,23 @@ pub fn run(mut a: Args) -> terrio::Result<()> {
             }
             terrio::ops::vector_filter::write_vector_with_mode(&layers, &a.output, &options, a.vector.write_mode())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kmz_resources;
+
+    #[test]
+    fn kmz_resources_take_an_existing_file_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let named = dir.path().join("pin=blue.png");
+        std::fs::write(&named, b"blue").unwrap();
+        let source = dir.path().join("red.png");
+        std::fs::write(&source, b"red").unwrap();
+        let named = named.to_str().unwrap().to_string();
+        let mapped = format!("icons/pin.png={}", source.to_str().unwrap());
+        let got = kmz_resources(&[named.clone(), mapped]).unwrap();
+        assert_eq!(got, vec![(named, b"blue".to_vec()), ("icons/pin.png".to_string(), b"red".to_vec())]);
     }
 }

@@ -26,6 +26,14 @@
 
 ### Formats
 
+- GeoJSON and GeoJSONSeq outputs write a field as each feature's `id` member with GDAL's
+  `ID_FIELD` and `ID_TYPE` creation options (`--lco`, `GeoJsonOptions::id_field` and
+  `id_type`), so the string identifiers read from a GeoJSON `id` go back out as RFC 7946 `id`
+  members. `GeoJsonOptions` is no longer `Copy`.
+- KMZ archives can carry files such as the icon images of `SYMBOL` styles (#394):
+  `VectorWriteOptions::kmz` (`KmzOptions::resources`), `terrio convert --kmz-resource`, Python's
+  `kmz_resources=` and JavaScript's `kmzResources` pack them beside the layer documents, where
+  relative icon links resolve.
 - HEC-RAS geometry (`.g##.hdf`) and plan (`.p##.hdf`) HDF files are read as
   vector layers (the `HECRAS` driver, the `hecras` feature, on by default), through the
   [`ras-commander-fast-hdf`](https://crates.io/crates/ras-commander-fast-hdf)
@@ -232,6 +240,12 @@
 
 ### Shapefile
 
+- The rings of polygon records can be organized by any of the methods of GDAL's
+  `OGR_ORGANIZE_POLYGONS`, chosen with the `ORGANIZE_POLYGONS` open option (`--oo`,
+  `VectorOpenOptions::shapefile`) or the `OGR_ORGANIZE_POLYGONS` (or `TERRIO_ORGANIZE_POLYGONS`)
+  environment variable. `DEFAULT` groups rings by containment, whatever their winding, so files
+  that wind every ring one way keep their holes. `ONLY_CCW` stays the default, as in GDAL. With
+  every method, the self-touching rings below are split first, as GDAL 3.13 does.
 - In polygon records of several parts, rings that touch themselves at a vertex
   to enclose a hole, which Esri allows, are now split into an exterior and
   holes when read, wherever the stored ring starts, as GDAL 3.13 does (GDAL
