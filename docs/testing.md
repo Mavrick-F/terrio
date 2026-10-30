@@ -987,7 +987,7 @@ recursively without touching the sibling `data2/` and `dirkeep` keys, and the wh
 refused. GDAL 3.13.3 review regressions also compare a query-bearing remote ZIP listing
 and extracted real-file bytes, and recursive S3 deletion when an exact object and its
 `prefix/` children coexist: only children are deleted, preserving the exact object and
-neighboring prefixes. File moves remove the exact source object and preserve coexisting prefix children. Recursive deletion of a lone object fails without deleting it, matching GDAL 3.13.3. A missing local destination with a trailing slash fails without creating the directory. The local suite has 25 cases. Uploading the 7-file Natural Earth tree took terrio 10 requests and GDAL 20; the
+neighboring prefixes. File moves remove the exact source object and preserve coexisting prefix children. Recursive deletion of a lone object fails without deleting it, matching GDAL 3.13.3. A missing local destination with a trailing slash fails without creating the directory. The local suite has 33 cases, including SOZip. Uploading the 7-file Natural Earth tree took terrio 10 requests and GDAL 20; the
 recursive listing 3 requests each. With `--remote`, listings of public S3 (hrrrzarr), Google
 Cloud Storage (CMIP6), Azure (Daymet, with a Planetary Computer SAS token), an HTML index page
 (download.osgeo.org) and a remote zip archive compare identically; GDAL omits the directories
@@ -1460,6 +1460,50 @@ cargo test -p terrio-cli --test inspection
 pytest python/tests/test_check.py
 TERRIO_TEST_DATA=../terrio-data node --test --test-name-pattern='checkDataset' js/tests/node.test.mjs
 ```
+
+## Seek-optimized ZIP archives (#289)
+
+The `vsi` conformance suite includes SOZip create/list/optimize/validate cross-reads
+against GDAL 3.13.3 using the real Natural Earth places files. A USGS DEM archived
+with SOZip is served over local HTTP; a 256 x 256 window must match GDAL's source
+window exactly, and the measured response bytes must be below one quarter of the
+archive size. The local Terrio run compared with GDAL 3.13.3 transferred 3,028,167 bytes in 183 requests
+from a 48,788,679-byte archive. This verifies lazy compressed-member access without
+full extraction; these are I/O counts, not timing claims.
+
+```sh
+python scripts/conformance.py ../terrio-data --only vsi --strict
+cargo test -p terrio --lib sozip
+cargo test -p terrio-cli --test sozip
+pytest python/tests/test_vsi.py
+node --test --test-name-pattern='sozip' js/tests/node.test.mjs
+```
+
+Rust regressions cover exact and partial chunks, independent random reads, append
+and overwrite behavior, ordinary ZIP interoperability, metadata properties, damaged
+index offsets, index size arithmetic, and zero chunk sizes. Failed additions and
+invalid optimization options must leave existing output bytes unchanged. The CLI
+integration test exercises command parsing, exit statuses, JSON and MCP dispatch.
+
+SOZip review regressions cover header-first index rejection with counted reads, small reads
+from MiB chunks without full-chunk fetches, linear sequential reads, independent concurrent
+reopens, forced ZIP64 descriptors on small members, archive comments, central extra-field
+limits, DOS date bounds, directory local headers and credential-redacted diagnostics.
+Validation uses streamed CRC checks and independent bounded decoders; it does not retain
+whole uncompressed members or index offset tables.
+Additional review regressions check recursive output exclusion, native/memory append
+snapshot changes, actual-length Auto chunking, credential-free remote member names,
+stored-member size/range checks, unexpected EOF and offset overflow. Append/optimize
+share compression/index emission; validation and random readers reset reusable decoders.
+Further regressions cover CP437 hidden-index names, Unix/remote literal backslashes
+and directory KV properties retained during optimization. Empty native/memory output
+placeholders are accepted as new archives and compared with GDAL using a real member.
+Review regressions also cover non-leading ZIP64 index extra fields, the writer offset
+budget, native advisory append locks, absent-output races in native/memory storage,
+colon-containing path components and stale native reopens (including equal-length,
+restored-mtime replacements). Native first opens retain their original handle; identity
+checks add metadata checks without extra archive opens.
+
 
 ## GeoPackage specification validation
 

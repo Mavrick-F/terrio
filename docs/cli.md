@@ -1735,6 +1735,7 @@ terrio vsi copy /vsizip//vsicurl/https://host/a.zip/a.shp .
 terrio vsi sync -r --strategy ETag data/ s3://bucket/prefix   # gdal vsi sync
 terrio vsi move s3://bucket/old s3://bucket/new        # gdal vsi move (mv, ren, rename)
 terrio vsi delete -r s3://bucket/prefix                # gdal vsi delete (rm, rmdir, del)
+terrio vsi sozip create -j big.gpkg big.gpkg.zip         # gdal vsi sozip (see below)
 ```
 
 File management across locations, as GDAL's `gdal vsi` commands do on its virtual file systems:
@@ -1876,6 +1877,82 @@ Byte copies and copy-delete moves refuse pipes, sockets and devices. Recursive c
 `--skip-errors` report those entries and continue with regular files. ZIP member names retain
 valid UTF-8; unflagged non-UTF-8 legacy names are decoded as CP437 into Unicode. GDAL can instead emit
 raw non-UTF-8 bytes for those names.
+
+
+### vsi sozip
+
+```sh
+terrio vsi sozip create -j roads.gpkg dem.tif data.zip        # gdal vsi sozip create
+terrio vsi sozip create -r --enable-sozip yes --sozip-chunk-size 64K dir/ data.zip
+terrio vsi sozip optimize plain.zip seek.zip                  # gdal vsi sozip optimize
+terrio vsi sozip list /vsicurl/https://host/data.zip          # gdal vsi sozip list
+terrio vsi sozip validate -v data.zip                         # gdal vsi sozip validate
+```
+
+Seek-Optimized ZIP (SOZip index version 1): a Deflate member compressed in independent chunks, with a hidden
+index (`.name.sozip.idx`) of their offsets, so that readers can start decompressing anywhere.
+`create` adds files (directories with `-r`; `-j` drops their directories) to a new archive, or to
+an existing one unless `--overwrite`; `--enable-sozip auto` (the default) seek-optimizes files of
+at least `--sozip-min-file-size` (1 MB), `yes` every file larger than a chunk
+(`--sozip-chunk-size`, 32 KB), `no` none; `--content-type` stores GDAL's `KV` property. Inputs
+can be any location `vsi` reads; outputs are local or `/vsimem/`. `optimize` rewrites an archive's
+members. `list` prints GDAL's table (`--json` for JSON); `validate` decompresses every member
+and checks its CRC-32, each index's header against its member and its offsets, and that every
+chunk decompresses on its own; it exits with status 1 when the archive is not valid.
+
+GeoTIFFs in a zip archive are read in place when stored or seek-optimized: `terrio info` and
+window reads of `/vsizip/archive.zip/dem.tif` (or of a remote archive, by range requests) read
+only the chunks they need instead of extracting the archive. Other members, and other formats,
+are extracted to a temporary directory first. ZIP readers reopen independently for parallel
+TIFF decoding while sharing remote range caches. Native ZIP-member raster exports stream
+strips and treat the containing archive as an input when checking overwrite aliases.
+Random reads check requested chunk structure; they do not read the whole member to check its
+CRC-32. Use `vsi sozip validate` for the complete checksum and independent-chunk checks.
+
+GDAL 3.13.3's `sozip optimize` also adds the input archive itself to its output (a bug); terrio
+does not. Native creation and optimization stream to an atomic temporary output; compressed
+payload spools spill to disk after 64 MiB even when the source size was unknown. Central
+records and writer chunk offsets remain in memory. `/vsimem/` output size bounds its memory
+use. Validation streams every member, and index tables are checked with a fixed buffer and
+read by offset when needed. Lazy readers retain a 64 KiB decoded window and decoder state,
+including for large chunk sizes. `list` performs index header/offset checks; only `validate`
+checks every independent compressed chunk. Optimization preserves member names verbatim,
+including unsafe paths present in an input archive; extraction enforces its own path checks.
+Create-only options (`recursive`, `junk_paths`, `content_type`) are rejected by optimize. Not supported: `sozip create` progress bars
+and multithreaded compression.
+
+Create accepts existing empty placeholders as new archives. Append copies every
+payload byte before the old central directory into the replacement,
+then rewrites central records: adding a small file costs a full archive rewrite. The
+central records and prefix come from one retained input handle/snapshot; detected native
+file changes abort publication, and in-memory append uses a version-checked replacement.
+Unix appends hold an advisory exclusive archive lock through flush, sync and publication;
+other append attempts fail while that lock is held. Writers that ignore advisory locks
+and non-Unix native writers are not serialized. A destination that was initially absent
+is published only if it remains absent, including in-memory destinations.
+Recursive creation enumerates inputs before opening the temporary output and excludes
+an existing output from its own input tree. Remote member names omit URL userinfo,
+queries and fragments. Auto chunking uses streamed length even without a size hint.
+Its provisional full-flush boundaries reset the compression dictionary even for members
+below the indexing threshold. On the real 11,146,182-byte Natural Earth places DBF, with
+a threshold above its size, Auto produced 529,185 compressed bytes versus 482,152 with
+`--enable-sozip no` (9.75% larger); payload bytes agree. Use `no` to avoid that tradeoff.
+Writers retain at most 1,048,576 chunk offsets (8 MiB) per member; exceeding this budget
+fails before adding an offset. Use a larger chunk size or disable indexing for larger members.
+
+`list` intentionally checks every index offset: its index-table work is eight bytes per
+additional chunk (plus a 32-byte header), so remote listings can fetch whole offset tables.
+A local HTTP listing of the 48,788,679-byte USGS archive transferred 29,895 bytes
+in two requests, including its 12,600-byte index (32 KiB chunks).
+Random member opens check the header and requested chunks to keep window reads lazy;
+a malformed requested chunk raises an error. `validate` performs the complete index,
+independent-decoding and checksum checks. Decoder state and buffers are reused between
+chunks; the offset cache mutex is released before archive I/O. TIFF prefetch hints are
+not yet coalesced across ZIP chunks, so remote windows use on-demand range reads.
+Native parallel member reopens reject changed archive identity, size or timestamps
+without reparsing offsets against a different archive. When keeping paths, literal backslashes in Unix/remote names are preserved;
+`--junk-paths` flattens either separator. Optimize preserves directory KV properties.
+
 
 ## fill-nodata
 

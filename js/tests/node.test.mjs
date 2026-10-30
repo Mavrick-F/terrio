@@ -2748,6 +2748,32 @@ test("dataset memory paths preserve edge spaces without aliasing", () => {
   }
 });
 
+test("sozip: create, list, validate and optimize in memory", () => {
+  const lines = [];
+  for (let i = 0; i < 20000; i++) lines.push(`${i},${(i * 7919) % 10007}`);
+  const big = new TextEncoder().encode(lines.join("\n"));
+  terrio.vsiWrite("/vsimem/jssozip/big.csv", big);
+  terrio.vsiWrite("/vsimem/jssozip/small.txt", new TextEncoder().encode("small"));
+  terrio.vsiWrite("/vsimem/jssozip/out.zip", new Uint8Array());
+  const r = terrio.sozipCreate(["/vsimem/jssozip/big.csv", "/vsimem/jssozip/small.txt"], "/vsimem/jssozip/out.zip",
+    { enable: "yes", chunkSize: 4096, junkPaths: true });
+  assert.equal(r.seek_optimized, 1);
+  const members = terrio.sozipList("/vsimem/jssozip/out.zip");
+  assert.deepEqual(members.map(m => [m.name, m.sozip_chunk_size]), [["big.csv", 4096], ["small.txt", null]]);
+  const before = terrio.vsiRead("/vsimem/jssozip/out.zip");
+  assert.throws(() => terrio.sozipCreate(["/vsimem/jssozip/big.csv"], "/vsimem/jssozip/out.zip", { overwrite: true, chunkSize: 0 }), /chunk size/);
+  assert.throws(() => terrio.sozipOptimize("/vsimem/jssozip/out.zip", "/vsimem/jssozip/opt.zip", { chunkSize: 0 }), /chunk size/);
+  assert.deepEqual(terrio.vsiRead("/vsimem/jssozip/out.zip"), before);
+  assert.throws(() => terrio.sozipOptimize("/vsimem/jssozip/out.zip", "/vsimem/jssozip/opt.zip", { junkPaths: true }), /unknown field/);
+  const v = terrio.sozipValidate("/vsimem/jssozip/out.zip");
+  assert.ok(v.valid);
+  assert.deepEqual(v.sozip_files, ["big.csv"]);
+  assert.deepEqual(terrio.vsiRead("/vsizip//vsimem/jssozip/out.zip/big.csv"), big);
+  terrio.sozipOptimize("/vsimem/jssozip/out.zip", "/vsimem/jssozip/opt.zip", { enable: "yes", chunkSize: 8192 });
+  assert.equal(terrio.sozipList("/vsimem/jssozip/opt.zip")[0].sozip_chunk_size, 8192);
+  terrio.vsiDelete("/vsimem/jssozip", true);
+});
+
 test("validateGpkg reports complete verdicts for bytes and memory paths", {
   skip: needs("sqlite") || (!DATA || !existsSync(join(DATA, "countries.gpkg")) ? "requires real GeoPackage data" : false),
 }, () => {
