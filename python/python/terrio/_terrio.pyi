@@ -115,6 +115,7 @@ __all__ = [
     "open_stream",
     "check_coverage",
     "simplify",
+    "simplify_coverage",
     "segmentize",
     "convex_hull",
     "concave_hull",
@@ -408,6 +409,7 @@ class Layer:
         driver: str | None = None,
         *,
         kmz_resources: Mapping[str, bytes] | None = None,
+        preserve_declared_geometry_type: bool = False,
     ) -> None: ...
     def to_bytes(
         self,
@@ -415,6 +417,7 @@ class Layer:
         driver: str | None = None,
         *,
         kmz_resources: Mapping[str, bytes] | None = None,
+        preserve_declared_geometry_type: bool = False,
     ) -> bytes: ...
 
 @final
@@ -436,6 +439,7 @@ class VectorDataset:
         driver: str | None = None,
         *,
         kmz_resources: Mapping[str, bytes] | None = None,
+        preserve_declared_geometry_type: bool = False,
     ) -> None: ...
 
 @final
@@ -850,6 +854,8 @@ def write_vector(
     crs: str | None = None,
     append: bool = False,
     overwrite: bool = False,
+    *,
+    preserve_declared_geometry_type: bool = False,
 ) -> None: ...
 @final
 class FeatureStream:
@@ -2256,3 +2262,22 @@ def check_coverage(
 ) -> Layer:
     """Invalid coverage edges, retaining CRS; XY diagnostics, empty schema and new IDs."""
     ...
+
+@overload
+def simplify_coverage(
+    src: Any,
+    tolerance: float,
+    *,
+    preserve_boundary: bool = False,
+    layer: str | None = None,
+    active_layer: None = None,
+) -> Layer: ...
+@overload
+def simplify_coverage(
+    src: Any,
+    tolerance: float,
+    *,
+    preserve_boundary: bool = False,
+    layer: None = None,
+    active_layer: str,
+) -> VectorDataset: ...

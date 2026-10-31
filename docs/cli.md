@@ -2847,6 +2847,100 @@ returns one Layer, accepting the usual vector path, dataset, layer or GeoJSON
 inputs. JavaScript `checkCoverage(src, {maximumGapWidth: 0, includeValid: false})`
 returns a Dataset and checks each input layer independently.
 
+### Simplify polygon coverages
+
+`terrio simplify-coverage counties.gpkg simplified.gpkg --tolerance 100` applies
+Visvalingam-Whyatt simplification to common coverage edges. The tolerance is the
+square root of the triangle-area threshold, in input CRS units. Shared nodes
+and matching boundaries remain consistent across adjacent features. Use a
+projected CRS for metre-based tolerances. `--preserve-boundary` retains exterior
+and hole boundaries, simplifying shared internal edges only.
+
+Input polygons must individually be valid and form a valid coverage; run
+`check-coverage` first. The operation materializes each layer and does not repair
+invalid coverages. Polygon and MultiPolygon features, including empty polygons,
+are supported. Null and non-polygon active inputs are rejected. The feature,
+polygon-part and hole counts and Polygon/MultiPolygon kinds are retained. Rings
+can simplify to three distinct vertices (four coordinates with closure), matching
+GDAL 3.13.3 with GEOS 3.14.1. Attributes, names and CRS are retained. Output feature
+IDs are sequential from 1, as in GDAL's default writer.
+
+`--layer` selects input layers. `--active-layer NAME` processes one selected
+layer and copies the other selected layers, including non-polygon data; output
+IDs are new in those layers too. An unknown active name is an error. Standard
+vector format, output-layer, append and overwrite options apply. GeoPackage
+output retains the input declaration, including `Unknown`, instead of inferring
+a concrete type from homogeneous features. GDAL geometry-field selection,
+upsert, skip-errors, GDALG output and driver-specific options are outside this
+command's subset. The command also supplies the MCP tool.
+
+Rust exposes `ops::coverage_simplify::{simplify_coverage, simplify_coverage_layers,
+CoverageSimplifyOptions}`. Python
+`terrio.simplify_coverage(src, tolerance, preserve_boundary=False, layer=None)`
+returns one Layer. With `active_layer="counties"`, it returns a `VectorDataset`,
+simplifying that layer and copying the other input layers. `layer` and
+`active_layer` are mutually exclusive. JavaScript
+`simplifyCoverage(src, tolerance, {preserveBoundary: false, activeLayer: "counties"})`
+returns a Dataset, copying inactive layers. Inputs use the usual vector paths,
+datasets, layers and GeoJSON forms of their respective bindings.
+
+For general GeoPackage writes, Rust `VectorWriteOptions`, Python `Layer.write`,
+`Layer.to_bytes`, `VectorDataset.write` and `write_vector` offer
+`preserve_declared_geometry_type=True`. JavaScript `Dataset.toBytes` accepts
+`preserveDeclaredGeometryType: true`. This option applies to GPKG output and
+retains base geometry declarations when creating/replacing layers; appending to an existing
+layer keeps its base geometry declaration, with dimension flags promoted to
+optional when needed to retain mixed layouts. The existing default infers the common
+feature type. The pure Rust GeoPackage encoders preserve M values by default, independent
+of this option, for native files, memory outputs and streams. Mixed measured
+and unmeasured geometries use optional M declarations, preserving their layouts. Streamed Z flags
+also reflect any coordinate with Z, matching the encoded payload even when the
+first coordinate is two-dimensional; absent ordinates are encoded as zero. This
+intentionally changes the default streaming and whole-layer output: later Z
+values previously dropped in that layout now survive, and vertices lacking Z
+receive `0.0`. Missing M ordinates within a measured geometry likewise receive
+zero. This encoding rule applies independently of declaration preservation.
+Ordinary updates retain the in-place transaction path, with the
+existing atomic rewrite fallback when in-place editing is unsupported.
+
+General CLI writers currently infer geometry declarations and do not expose a
+`preserve_declared_geometry_type` flag. `simplify-coverage` enables declaration
+preservation for its GeoPackage output. This is a scope limit of the general
+CLI/MCP writer options; the simplification operation itself preserves declarations
+across all public surfaces.
+
+Retained simplified vertices keep their Z values; GEOS drops M values from active
+polygon layers. Inactive layers retain their coordinates, including Z and M in
+GeoPackage output. Unknown GeoPackage declarations allow optional Z. The shared
+Layer model does not store source required/optional dimensional declarations, so
+this option cannot reproduce those hints for empty layers or explicitly required
+Z/M declarations. This is a metadata limitation even when coordinates match.
+
+Coverage simplification follows GDAL 3.13.3 / GEOS 3.14.1 and JTS when
+reassembling shared edges: exterior/hole vertex direction can change with input
+feature order. Ring direction is not preserved; polygon roles and topology are
+preserved. For example, reversing the two-feature shared-zigzag fixture yields
+signed exterior areas +8 and -8 in both Terrio and GDAL.
+
+For `simplifyCoverage`, JavaScript `layer` selects a single output layer and is
+mutually exclusive with `activeLayer`, which copies inactive layers.
+Interior shared-span vertices take Z from the representative edge encountered
+first. Shared endpoints use the preceding output span's Z; the first ring
+vertex uses the following span's Z. Neighbors can therefore retain different
+endpoint heights. Per-feature heights on shared spans are not independently
+preserved.
+
+With `preserve_declared_geometry_type` (JavaScript
+`preserveDeclaredGeometryType`), GeoPackage writers reject non-null features
+incompatible with a concrete declared type. Unknown declarations accept every
+geometry; GeometryCollection declarations also accept multipart subtypes.
+
+Mixed 2D/3D features use optional Z by default in every pure-Rust GeoPackage
+whole-layer, memory and streaming writer, independently of the preserve option;
+append/update also promote the declaration when needed. Null geometries do not
+force Z or M to optional. A typed-empty geometry encoded with an XY WKB type
+still counts as 2D for this registration, unlike SQL NULL.
+
 ## Separate-file raster tiles
 
 `terrio tile INPUT OUTPUT_DIR` writes separate `z/x/y.png` tiles. The default

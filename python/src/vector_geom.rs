@@ -3,7 +3,7 @@
 //! names).
 
 use crate::ops::input_layers;
-use crate::vector::PyLayer;
+use crate::vector::{PyLayer, PyVectorDataset};
 use crate::{Detach, PyResultExt, invalid};
 use pyo3::prelude::*;
 use terrio::Layer;
@@ -17,6 +17,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(clip_vector, m)?)?;
 
     m.add_function(wrap_pyfunction!(check_coverage, m)?)?;
+    m.add_function(wrap_pyfunction!(simplify_coverage, m)?)?;
     m.add_function(wrap_pyfunction!(segmentize, m)?)?;
     m.add_function(wrap_pyfunction!(convex_hull, m)?)?;
     m.add_function(wrap_pyfunction!(concave_hull, m)?)?;
@@ -366,4 +367,40 @@ fn check_coverage(
     let options = terrio::ops::coverage::CoverageCheckOptions { maximum_gap_width, include_valid };
     let inner = py.detach_result(|| terrio::ops::coverage::check_coverage(&input, &options)).py()?;
     Ok(PyLayer { inner })
+}
+
+/// Simplify shared polygon coverage boundaries without creating gaps or overlaps.
+///
+/// Args:
+///     src: Polygonal vector input forming a valid coverage, or multiple layers.
+///     tolerance: Square root of the triangle-area threshold, in input CRS units.
+///     preserve_boundary: Retain exterior/hole boundaries.
+///     layer: Select one layer and return a Layer; mutually exclusive with active_layer.
+///     active_layer: Simplify this layer and copy the others, returning a VectorDataset.
+///
+/// Returns:
+///     Layer or VectorDataset: Simplified coverage with attributes/CRS and sequential IDs.
+#[pyfunction]
+#[pyo3(signature = (src, tolerance, *, preserve_boundary=false, layer=None, active_layer=None))]
+fn simplify_coverage(
+    py: Python<'_>,
+    src: &Bound<'_, PyAny>,
+    tolerance: f64,
+    preserve_boundary: bool,
+    layer: Option<String>,
+    active_layer: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let options = terrio::ops::coverage_simplify::CoverageSimplifyOptions { tolerance, preserve_boundary };
+    if let Some(active) = active_layer {
+        if layer.is_some() {
+            return Err(invalid("layer and active_layer are mutually exclusive"));
+        }
+        let input = input_layers(py, src, None)?;
+        let layers = py.detach_result(|| terrio::ops::coverage_simplify::simplify_coverage_layers(&input, &options, Some(&active))).py()?;
+        let dataset = terrio::VectorDataset { layers, driver: terrio::formats::VectorDriver::GeoJSON };
+        return Ok(Py::new(py, PyVectorDataset::new(py, dataset)?)?.into_any());
+    }
+    let input = one_layer(py, src, layer)?;
+    let inner = py.detach_result(|| terrio::ops::coverage_simplify::simplify_coverage(&input, &options)).py()?;
+    Ok(Py::new(py, PyLayer { inner })?.into_any())
 }

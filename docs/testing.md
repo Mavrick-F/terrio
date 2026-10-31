@@ -1681,6 +1681,34 @@ are rejected. The prerequisite probe skips the suite when the GDAL command is
 unavailable. The port's exact JTS sources and adaptations are recorded in
 [jts-provenance.md](jts-provenance.md).
 
+### Coverage simplification
+
+`scripts/compare_coverage_simplify_with_gdal.py ../terrio-data --terrio target/release/terrio`
+is registered as `coverage-simplify`. It compares projected Tennessee counties
+at four tolerances, shared zigzags, small holes and polygon parts, empty polygons
+Z/M/ZM polygons and active-layer copying of a ZM point layer. Consecutive repeated vertices are also compared at zero and high tolerance.
+Cases run with exterior boundary
+preservation both enabled and disabled. All retained edge coordinates and
+multiplicity, per-feature geometry kinds, attributes, IDs, CRS, layer names and
+declared layer types and GeoPackage Z/M flags must match exactly for these fixtures. Ring/component order and direction are
+ignored. Inactive non-polygon geometry coordinates are checked by canonical ISO
+WKB. GDAL independently validates every output polygon coverage.
+
+The verifier has regressions for wrong declarations, changed feature geometry
+kinds, moved vertices, changed attributes/IDs and moved inactive points. It also
+checks that an unavailable reference command skips before dataset access.
+
+Rust, CLI/MCP, Python and Node checks cover shared-edge consistency, boundary
+preservation, triangle minima, preservation of holes/parts, empty inputs,
+invalid inputs/tolerances and active-layer selection. Writer tests exercise
+Unknown declarations in native and memory codecs, append/replacement semantics,
+untouched data, format-option rejection and the in-place update path. The isolated
+Linux measurement
+`python scripts/measure_gpkg_declared_geometry.py --payload-mib 8` records
+process read characters and file size, asserts reads stay below half the file,
+and verifies the inode and untouched payload. This avoids unrelated reads from
+parallel unit tests contaminating the measurement.
+
 ## Separate-file raster tiles (#289)
 
 `raster-tiles` in `scripts/conformance.py` compares XYZ/TMS folder output with

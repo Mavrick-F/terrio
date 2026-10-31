@@ -2852,6 +2852,41 @@ test("checkCoverage uses GDAL schema and flags overlaps and narrow gaps", () => 
 });
 
 
+test("simplifyCoverage simplifies shared edges and preserves exterior boundaries", () => {
+  const source = {type: "FeatureCollection", features: [
+    {type: "Feature", properties: {name: "west"}, geometry: {type: "Polygon", coordinates: [[[0,0],[2,0],[1.8,1],[2.2,2],[1.8,3],[2,4],[0,4],[0,0]]]}},
+    {type: "Feature", properties: {name: "east"}, geometry: {type: "Polygon", coordinates: [[[2,0],[4,0],[4,4],[2,4],[1.8,3],[2.2,2],[1.8,1],[2,0]]]}}
+  ]};
+  const result = terrio.simplifyCoverage(source, 1, {preserveBoundary: true});
+  const features = result.toGeoJSON().features;
+  assert.equal(features.length, 2);
+  assert.deepEqual(features.map(f => f.properties.name), ["west", "east"]);
+  assert.ok(features.every(f => f.geometry.coordinates[0].length === 5));
+  assert.equal(terrio.checkCoverage(result).toGeoJSON().features.length, 0);
+  const polygon = {type:"Polygon",coordinates:[[[0,0],[2,0],[4,0],[6,0],[6,2],[6,4],[4,4],[2,4],[0,4],[0,2],[0,0]]]};
+  assert.equal(terrio.simplifyCoverage(polygon, 100).toGeoJSON().features[0].geometry.coordinates[0].length, 4);
+  assert.throws(() => terrio.simplifyCoverage(source, -1), /tolerance/);
+});
+
+
+test("GPKG toBytes can retain declared geometry types", () => {
+  const source = terrio.fromGeoJSON({type:"FeatureCollection",features:[{type:"Feature",properties:{},geometry:{type:"Point",coordinates:[1,2]}}]});
+  const bytes = source.toBytes("unknown.gpkg", {preserveDeclaredGeometryType:true});
+  assert.deepEqual(terrio.open(bytes,"unknown.gpkg").toGeoJSON().features[0].geometry, {type:"Point",coordinates:[1,2]});
+  assert.throws(() => source.toBytes("out.geojson", {preserveDeclaredGeometryType:true}), /GPKG/);
+});
+
+test("GPKG toBytes uses valid optional M declarations for mixed layouts", () => {
+  const source = terrio.open(new TextEncoder().encode('WKT\n"POINT M (1 2 3)"\n"POINT (4 5)"\n'), "mixed.csv");
+  for (const preserve of [false, true]) {
+    const bytes = source.toBytes("mixed.gpkg", {preserveDeclaredGeometryType: preserve});
+    const report = terrio.validateGpkg(bytes, {fullCheck: true});
+    assert.equal(report.valid, true, JSON.stringify(report));
+    assert.equal(report.complete, true);
+  }
+  source.free();
+});
+
 test("checkCoverage emits XY diagnostics for elevated polygons", () => {
   const geometry = {type: "Polygon", coordinates: [[[0,0,1],[2,0,2],[0,2,3],[0,0,1]]]};
   const feature = {type: "Feature", properties: {}, geometry};
@@ -2919,4 +2954,39 @@ test("rasterTiles handles per-channel nodata without hiding valid RGB channels",
   });
   assert.equal(report.written, 1);
   raster.free();
+});
+
+
+test("simplifyCoverage selects one layer or copies inactive layers", () => {
+  const geometry={type:"Polygon",coordinates:[[[0,0],[2,0],[2,2],[0,2],[0,0]]]};
+  const data=name=>terrio.fromGeoJSON({type:"FeatureCollection",features:[{type:"Feature",properties:{},geometry}]},name);
+  const source=terrio.concat([data("a"),data("b")],{mode:"stack"});
+  const names=source.layerNames();
+  const selected=terrio.simplifyCoverage(source,0,{layer:names[0]});
+  assert.deepEqual(selected.layerNames(),[names[0]]);
+  const copied=terrio.simplifyCoverage(source,0,{activeLayer:names[0]});
+  assert.deepEqual(copied.layerNames(),names);
+  assert.throws(()=>terrio.simplifyCoverage(source,0,{layer:"missing"}),/not found/);
+  assert.throws(()=>terrio.simplifyCoverage(source,0,{layer:names[0],activeLayer:names[0]}),/mutually exclusive/);
+});
+
+test("GPKG toBytes registers optional Z for mixed height layouts", () => {
+  const source=terrio.open(new TextEncoder().encode('WKT\n"POINT Z (1 2 3)"\n"POINT (4 5)"\n'),"mixed.csv");
+  for(const preserve of [false,true]) {
+    const bytes=source.toBytes("mixed.gpkg",{preserveDeclaredGeometryType:preserve});
+    const report=terrio.validateGpkg(bytes,{fullCheck:true});
+    assert.equal(report.valid,true,JSON.stringify(report));
+  }
+});
+
+
+test("GPKG toBytes preserves valid typed-empty polygon bodies", () => {
+  const source=terrio.fromGeoJSON({type:"FeatureCollection",features:[
+    {type:"Feature",properties:{},geometry:{type:"Polygon",coordinates:[[[0,0,1],[2,0,2],[0,2,3],[0,0,1]]]}},
+    {type:"Feature",properties:{},geometry:{type:"Polygon",coordinates:[[]]}}
+  ]});
+  assert.equal(source.toGeoJSON().features[1].geometry.type,"Polygon");
+  const bytes=source.toBytes("empty.gpkg");
+  const report=terrio.validateGpkg(bytes,{fullCheck:true});
+  assert.equal(report.valid,true,JSON.stringify(report));
 });

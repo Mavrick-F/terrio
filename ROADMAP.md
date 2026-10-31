@@ -102,6 +102,21 @@ commands. Command-group progress:
       `raster-tiles`; direct-source lower zooms differ from GDAL's generated-image
       pyramid. Retile file layouts and publication helpers remain unimplemented.
 
+- [x] Vector clipping: points, lines, polygons and collections, with bbox,
+      geometry, filtered vector/raster templates and region CRS transforms through
+      Rust, CLI/MCP, Python and JavaScript. Landed in
+      [#419](https://github.com/opengeos/terrio/pull/419), with 27 GDAL 3.13.3
+      comparisons and measured remote template I/O.
+
+- [x] Polygon coverage validation: indexed overlap, shared-node and narrow-gap
+      checks through Rust, CLI/MCP, Python and JavaScript. Landed in
+      [#420](https://github.com/opengeos/terrio/pull/420), with 24 exact
+      GDAL 3.13.3 comparisons, including real counties and dimensional inputs.
+
+- [ ] Coverage simplification: shared-edge topology preservation, boundary options
+      and active-layer copying across the public APIs. Part of
+      [#289](https://github.com/opengeos/terrio/issues/289); pending review and merge.
+
 - [x] Vector geometry operations: simplify, segmentize, convex and concave hulls, swap XY,
       geometry-type conversion, grouped combine and spatial sort. Landed in
       [#306](https://github.com/opengeos/terrio/pull/306), through Rust, CLI/MCP, Python and
