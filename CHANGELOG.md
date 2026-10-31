@@ -14,10 +14,10 @@
 - Point cloud radius searches sort with Rust's standard library (#414).
 - The repository follows the [REUSE specification](https://reuse.software): files
   adapted from other projects carry SPDX headers naming their sources, and
-  `NOTICE` lists every upstream project and its copyright holders (#415).
+  `NOTICE` lists every upstream project and its copyright holders (#415, #435).
 - `LICENSE` names its copyright holders again (#416).
 - Package metadata declares MIT AND MPL-2.0: the point cloud eigensolver
-  (`pointcloud/filters/selfadjoint.rs`) is MPL-2.0.
+  (`pointcloud/filters/selfadjoint.rs`) is MPL-2.0 (#435).
 - Earlier releases ship older notices; upgrading is recommended.
 
 ### Geometry implementation provenance
