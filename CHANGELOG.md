@@ -8,6 +8,16 @@
   linux/arm64 to the GitHub Container Registry (`ghcr.io/opengeos/terrio`) with
   each release.
 
+### Licensing
+
+- Geometry routines are ports of JTS or independent implementations (#402).
+- Point cloud radius searches sort with Rust's standard library (#414).
+- The repository follows the [REUSE specification](https://reuse.software): files
+  adapted from other projects carry SPDX headers naming their sources, and
+  `NOTICE` lists every upstream project and its copyright holders (#415).
+- `LICENSE` names its copyright holders again (#416).
+- Earlier releases ship older notices; upgrading is recommended.
+
 ### Geometry implementation provenance
 
 - Replace the GEOS-derived simplification, hull, tile-validity, spatial-packing
